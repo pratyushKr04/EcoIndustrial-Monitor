@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Environmental Monitoring Dashboard — AI-powered industrial compliance monitoring using satellite imagery and deep learning.">
+    <title>Environmental Monitoring Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ═══ NAV ═══ -->
+<nav class="nav">
+    <div class="nav-inner">
+        <div class="nav-brand">
+            <div class="icon">🛰️</div>
+            <span>EnvMonitor</span>
+        </div>
+        <ul class="nav-links">
+            <li><a href="#analyze" class="active">Analyze</a></li>
+            <li><a href="#overview">Overview</a></li>
+            <li><a href="#compliance">Compliance</a></li>
+            <li><a href="#maps">Maps</a></li>
+            <li><a href="#metrics">Metrics</a></li>
+        </ul>
+    </div>
+</nav>
+
+<!-- ═══ HERO ═══ -->
+<header class="hero">
+    <h1>Environmental Monitoring System</h1>
+    <p class="subtitle">AI-powered industrial compliance monitoring using Sentinel-2 satellite imagery and deep learning</p>
+
+    <!-- ── City Analysis Search Bar ── -->
+    <div class="analyze-bar" id="analyze">
+        <div class="search-group">
+            <input type="text" id="city-input" class="city-input"
+                   placeholder="Enter city name (e.g. Mumbai, India)"
+                   autocomplete="off">
+            <button id="analyze-btn" class="analyze-btn" onclick="startAnalysis()">
+                <span class="btn-icon">🔍</span>
+                <span class="btn-text">Analyze</span>
+            </button>
+        </div>
+
+        <!-- Date Range Pickers -->
+        <div class="date-range-row">
+            <div class="date-group">
+                <label class="date-label">Before Period (T1)</label>
+                <div class="date-inputs">
+                    <input type="date" id="t1-start" class="date-input" value="2023-01-01">
+                    <span class="date-sep">to</span>
+                    <input type="date" id="t1-end" class="date-input" value="2023-06-30">
+                </div>
+            </div>
+            <div class="date-group">
+                <label class="date-label">After Period (T2)</label>
+                <div class="date-inputs">
+                    <input type="date" id="t2-start" class="date-input" value="2024-01-01">
+                    <span class="date-sep">to</span>
+                    <input type="date" id="t2-end" class="date-input" value="2024-06-30">
+                </div>
+            </div>
+        </div>
+
+        <div class="search-hint">Type any city name and select the date ranges to compare vegetation changes between the two periods.</div>
+    </div>
+
+    <!-- ── Progress Panel ── -->
+    <div class="progress-panel" id="progress-panel" style="display:none;">
+        <div class="progress-header">
+            <div class="progress-status">
+                <div class="spinner"></div>
+                <span id="progress-title">Analyzing...</span>
+            </div>
+            <span id="progress-elapsed" class="progress-elapsed"></span>
+        </div>
+        <div class="progress-log" id="progress-log"></div>
+    </div>
+
+    <div class="hero-meta" id="hero-meta">
+        <div class="tag">📍 ROI: <span id="tag-roi">Loading...</span></div>
+        <div class="tag">📅 Period: <span id="tag-period">—</span></div>
+        <div class="tag">🏭 Regions: <span id="tag-regions">—</span></div>
+    </div>
+</header>
+
+<!-- ═══ MAIN CONTENT ═══ -->
+<main class="container">
+
+    <!-- ── Stats Cards ── -->
+    <section id="overview" class="section">
+        <div class="stats-grid" id="stats-grid">
+            <div class="stat-card fade-in">
+                <div class="label">Total Regions</div>
+                <div class="value" id="stat-total">—</div>
+                <div class="sub">Industrial zones analyzed</div>
+            </div>
+            <div class="stat-card fade-in">
+                <div class="label">Compliant</div>
+                <div class="value" id="stat-compliant" style="color: var(--accent-green)">—</div>
+                <div class="sub">Meeting vegetation threshold</div>
+            </div>
+            <div class="stat-card fade-in">
+                <div class="label">Violations</div>
+                <div class="value" id="stat-violations" style="color: var(--accent-red)">—</div>
+                <div class="sub">Below vegetation threshold</div>
+            </div>
+            <div class="stat-card fade-in">
+                <div class="label">Avg. Vegetation</div>
+                <div class="value" id="stat-avg-veg">—</div>
+                <div class="sub">Across all regions</div>
+            </div>
+            <div class="stat-card fade-in">
+                <div class="label">Total Change Area</div>
+                <div class="value" id="stat-change-area">—</div>
+                <div class="sub">Land-use change detected</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── Compliance Table ── -->
+    <section id="compliance" class="section">
+        <div class="section-header">
+            <h2>📋 Compliance Report <span class="badge" id="report-badge">—</span></h2>
+        </div>
+        <div class="table-wrap">
+            <div class="table-toolbar">
+                <div class="filter-group">
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="violation">🔴 Violations</button>
+                    <button class="filter-btn" data-filter="compliant">🟢 Compliant</button>
+                </div>
+                <span id="table-count" style="font-size:0.8rem;color:var(--text-muted)"></span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Region</th>
+                        <th>Size (px)</th>
+                        <th>Vegetation %</th>
+                        <th>Change Area (m²)</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="report-body">
+                    <tr><td colspan="5" class="loading"><div class="spinner"></div> Loading report...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- ── Map Gallery ── -->
+    <section id="maps" class="section">
+        <div class="section-header">
+            <h2>🗺️ Analysis Maps</h2>
+        </div>
+        <div class="map-gallery" id="map-gallery">
+            <div class="loading"><div class="spinner"></div> Loading maps...</div>
+        </div>
+    </section>
+
+    <!-- ── Training Metrics ── -->
+    <section id="metrics" class="section">
+        <div class="section-header">
+            <h2>📊 Training Metrics</h2>
+        </div>
+        <div class="metrics-grid" id="metrics-grid">
+            <div class="loading"><div class="spinner"></div> Loading metrics...</div>
+        </div>
+    </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

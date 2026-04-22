@@ -1,0 +1,12 @@
+tensorflow>=2.10
+osmnx>=1.0
+earthengine-api
+geemap
+rasterio
+geopandas
+shapely
+geopy
+numpy
+matplotlib
+scikit-learn
+tqdm
