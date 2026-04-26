@@ -77,8 +77,8 @@ def prepare_vegetation_data(image: np.ndarray,
     for idx, row in industrial_gdf.iterrows():
         poly = row.geometry
 
-        # Clip image to this industrial polygon
-        crop = clip_image_to_polygon(image, roi_bounds, poly)
+        # Clip image to this industrial polygon (no masking for training patches)
+        crop = clip_image_to_polygon(image, roi_bounds, poly, mask_outside=False)
 
         # Skip if too small or mostly empty
         h, w = crop.shape[:2]

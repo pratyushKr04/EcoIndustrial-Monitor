@@ -323,16 +323,35 @@ def run_inference(roi_config=None):
         # Align clipped images
         img1_clip, img2_clip = align_images(img1_clip, img2_clip)
 
+        # Derive valid pixel mask (pixels inside the polygon boundary)
+        # Masked-out pixels are zeroed across all bands, so any band > 0 = valid
+        valid_mask = np.any(img2_clip > 0, axis=2).astype(np.uint8)
+
         # Run vegetation model on t2
         veg_pred = predict_vegetation(veg_model, img2_clip)
 
         # Run change model on (t1, t2)
         chg_pred = predict_change(chg_model, img1_clip, img2_clip)
 
-        # Compute metrics
-        veg_pct  = compute_vegetation_percentage(veg_pred)
+        # Compute metrics (using valid_mask so only polygon pixels count)
+        veg_pct  = compute_vegetation_percentage(veg_pred, valid_mask=valid_mask)
         chg_area = compute_change_area(chg_pred)
         violation = veg_pct < VEG_VIOLATION_THRESHOLD
+
+        # Extract geographic coordinates for interactive map
+        centroid = poly.centroid
+        bounds = poly.bounds  # (minx, miny, maxx, maxy)
+
+        # Extract polygon boundary as coordinate list for Leaflet
+        try:
+            if poly.geom_type == 'MultiPolygon':
+                coords = list(poly.geoms[0].exterior.coords)
+            else:
+                coords = list(poly.exterior.coords)
+            # Leaflet uses [lat, lng] order
+            poly_coords = [[round(c[1], 6), round(c[0], 6)] for c in coords]
+        except Exception:
+            poly_coords = []
 
         result = {
             "region_id": int(region_id),
@@ -341,6 +360,13 @@ def run_inference(roi_config=None):
             "change_area_m2": round(chg_area, 2),
             "violation": bool(violation),
             "status": "NON-COMPLIANT" if violation else "COMPLIANT",
+            "lat": round(centroid.y, 6),
+            "lon": round(centroid.x, 6),
+            "bounds": [
+                [round(bounds[1], 6), round(bounds[0], 6)],  # [south, west]
+                [round(bounds[3], 6), round(bounds[2], 6)],  # [north, east]
+            ],
+            "polygon": poly_coords,
         }
         results.append(result)
         saved_count += 1

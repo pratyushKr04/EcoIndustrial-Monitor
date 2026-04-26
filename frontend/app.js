@@ -48,9 +48,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     await Promise.all([
         loadConfig(),
         loadReport(),
-        loadMaps(),
+        loadStaticMaps(),
         loadMetrics(),
     ]);
+
+    // Initialize interactive map after DOM is ready
+    initInteractiveMap();
+    // Plot regions if report data was already loaded
+    if (reportData.length > 0) plotRegionsOnMap(reportData);
 });
 
 
@@ -125,6 +130,20 @@ async function checkExistingJob() {
     } catch {}
 }
 
+// Pipeline steps detected from log output
+const PIPELINE_STEPS = [
+    { key: 'init',      label: 'Initializing',              pattern: /Starting analysis|Running:/ },
+    { key: 'roi',       label: 'Resolving Region',          pattern: /ROI|roi|geocod/i },
+    { key: 'osm',       label: 'Fetching OSM Data',         pattern: /OSM|industrial polygon|osm/i },
+    { key: 'gee',       label: 'Google Earth Engine',       pattern: /GEE|Earth Engine|Authenticat/i },
+    { key: 'satellite', label: 'Downloading Satellite Data', pattern: /Fetching t[12]|sentinel|image/i },
+    { key: 'models',    label: 'Loading AI Models',         pattern: /Loading.*model|load_model|\.h5/i },
+    { key: 'process',   label: 'Processing Regions',        pattern: /Processing region|region \d+/i },
+    { key: 'report',    label: 'Generating Report',         pattern: /Compliance report|SUMMARY|saved/i },
+];
+
+let currentStepIndex = 0;
+
 function showProgressPanel(city) {
     const panel = document.getElementById('progress-panel');
     const title = document.getElementById('progress-title');
@@ -132,8 +151,25 @@ function showProgressPanel(city) {
 
     panel.style.display = 'block';
     panel.className = 'progress-panel';
-    title.textContent = `Analyzing ${city}...`;
-    log.innerHTML = '<div class="log-line">Starting analysis...</div>';
+    title.textContent = `Analyzing ${city}`;
+    currentStepIndex = 0;
+
+    // Build step tracker HTML
+    const stepsHtml = PIPELINE_STEPS.map((step, i) => `
+        <div class="step-item ${i === 0 ? 'active' : ''}" id="step-${step.key}">
+            <div class="step-indicator">
+                <div class="step-dot"></div>
+            </div>
+            <span class="step-label">${step.label}</span>
+        </div>
+    `).join('');
+
+    log.innerHTML = `
+        <div class="step-tracker">${stepsHtml}</div>
+        <div class="log-output" id="log-output">
+            <div class="log-line">Initializing pipeline...</div>
+        </div>
+    `;
 
     // Disable analyze button
     const btn = document.getElementById('analyze-btn');
@@ -141,9 +177,32 @@ function showProgressPanel(city) {
     btn.querySelector('.btn-text').textContent = 'Running...';
 }
 
+function updateStepTracker(progressLines) {
+    // Detect which step we're on based on log content
+    const fullText = progressLines.join('\n');
+
+    for (let i = PIPELINE_STEPS.length - 1; i >= 0; i--) {
+        if (PIPELINE_STEPS[i].pattern.test(fullText)) {
+            if (i > currentStepIndex) {
+                currentStepIndex = i;
+            }
+            break;
+        }
+    }
+
+    // Update step indicators
+    PIPELINE_STEPS.forEach((step, i) => {
+        const el = document.getElementById(`step-${step.key}`);
+        if (!el) return;
+        el.className = 'step-item';
+        if (i < currentStepIndex) el.classList.add('completed');
+        else if (i === currentStepIndex) el.classList.add('active');
+    });
+}
+
 function startPolling() {
     if (pollingInterval) clearInterval(pollingInterval);
-    pollingInterval = setInterval(pollStatus, 2000);
+    pollingInterval = setInterval(pollStatus, 1500);  // Poll every 1.5s for snappier updates
 }
 
 function stopPolling() {
@@ -160,46 +219,64 @@ async function pollStatus() {
 
         const panel = document.getElementById('progress-panel');
         const title = document.getElementById('progress-title');
-        const log = document.getElementById('progress-log');
         const elapsed = document.getElementById('progress-elapsed');
 
         // Update elapsed time
         if (data.elapsed_seconds) {
             const mins = Math.floor(data.elapsed_seconds / 60);
             const secs = Math.floor(data.elapsed_seconds % 60);
-            elapsed.textContent = `${mins}m ${secs}s`;
+            elapsed.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
         }
 
-        // Update log
+        // Update log output and step tracker
         if (data.progress && data.progress.length > 0) {
-            log.innerHTML = data.progress
-                .map(line => `<div class="log-line">${escapeHtml(line)}</div>`)
-                .join('');
-            // Auto-scroll to bottom
-            log.scrollTop = log.scrollHeight;
+            updateStepTracker(data.progress);
+
+            const logOutput = document.getElementById('log-output');
+            if (logOutput) {
+                logOutput.innerHTML = data.progress
+                    .map(line => {
+                        // Color-code different types of log lines
+                        let cls = 'log-line';
+                        if (/error|fail|❌/i.test(line)) cls += ' log-error';
+                        else if (/✅|complete|saved|done/i.test(line)) cls += ' log-success';
+                        else if (/Processing region/i.test(line)) cls += ' log-highlight';
+                        else if (/Running:|Starting/i.test(line)) cls += ' log-dim';
+                        return `<div class="${cls}">${escapeHtml(line)}</div>`;
+                    })
+                    .join('');
+                logOutput.scrollTop = logOutput.scrollHeight;
+            }
         }
 
         // Handle completion
         if (data.status === 'done') {
             stopPolling();
             panel.classList.add('progress-done');
-            title.textContent = `✅ Analysis complete for ${data.city}`;
+            title.textContent = `Analysis Complete — ${data.city}`;
+
+            // Mark all steps as completed
+            PIPELINE_STEPS.forEach(step => {
+                const el = document.getElementById(`step-${step.key}`);
+                if (el) el.className = 'step-item completed';
+            });
 
             const btn = document.getElementById('analyze-btn');
             btn.disabled = false;
-            btn.querySelector('.btn-text').textContent = 'Analyze';
+            btn.querySelector('.btn-text').textContent = 'Run Analysis';
 
             // Reload dashboard data
-            await Promise.all([loadReport(), loadMaps()]);
+            await Promise.all([loadReport(), loadStaticMaps()]);
+            plotRegionsOnMap(reportData);
 
         } else if (data.status === 'error') {
             stopPolling();
             panel.classList.add('progress-error');
-            title.textContent = `❌ Analysis failed for ${data.city}`;
+            title.textContent = `Analysis Failed — ${data.city}`;
 
             const btn = document.getElementById('analyze-btn');
             btn.disabled = false;
-            btn.querySelector('.btn-text').textContent = 'Analyze';
+            btn.querySelector('.btn-text').textContent = 'Run Analysis';
 
         } else if (data.status === 'idle') {
             stopPolling();
@@ -207,7 +284,7 @@ async function pollStatus() {
 
             const btn = document.getElementById('analyze-btn');
             btn.disabled = false;
-            btn.querySelector('.btn-text').textContent = 'Analyze';
+            btn.querySelector('.btn-text').textContent = 'Run Analysis';
         }
 
     } catch (err) {
@@ -253,6 +330,9 @@ async function loadReport() {
         }
 
         renderTable();
+
+        // Plot on interactive map if available
+        if (leafletMap) plotRegionsOnMap(reportData);
     } catch {
         document.getElementById('report-body').innerHTML =
             '<tr><td colspan="5" class="empty-state"><div class="icon">📭</div><p>No compliance report found. Run an analysis above.</p></td></tr>';
@@ -307,51 +387,149 @@ function renderTable() {
         filtered = reportData.filter(r => !r.violation);
     }
 
-    document.getElementById('table-count').textContent =
-        `Showing ${filtered.length} of ${reportData.length}`;
+    const countEl = document.getElementById('table-count');
+    if (countEl) countEl.textContent = `Showing ${filtered.length} of ${reportData.length}`;
 
     if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="empty-state"><div class="icon">✅</div><p>No matching regions.</p></td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-state"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg><p>No matching regions.</p></td></tr>';
         return;
     }
 
     tbody.innerHTML = filtered.map(r => `
         <tr>
-            <td><strong>#${r.region_id}</strong></td>
-            <td>${r.size_px ? r.size_px.join(' × ') : '—'}</td>
-            <td>${(r.vegetation_percent * 100).toFixed(1)}%</td>
-            <td>${formatArea(r.change_area_m2)}</td>
+            <td class="mono"><strong>#${r.region_id}</strong></td>
+            <td class="mono">${r.size_px ? r.size_px.join(' × ') : '—'}</td>
+            <td class="mono">${(r.vegetation_percent * 100).toFixed(1)}%</td>
+            <td class="mono">${formatArea(r.change_area_m2)}</td>
             <td>
-                <span class="status-badge ${r.violation ? 'violation' : 'compliant'}">
-                    ${r.violation ? '🔴 Non-Compliant' : '🟢 Compliant'}
+                <span class="status-indicator ${r.violation ? 'violation' : 'compliant'}">
+                    <span class="status-dot"></span>
+                    ${r.violation ? 'Non-Compliant' : 'Compliant'}
                 </span>
             </td>
         </tr>
     `).join('');
 }
 
-// ─── Map Gallery ────────────────────────────────────────
-async function loadMaps() {
+// ─── Interactive Leaflet Map ────────────────────────────
+let leafletMap = null;
+let mapMarkers = [];
+
+function initInteractiveMap() {
+    const container = document.getElementById('interactive-map');
+    if (!container || leafletMap) return;
+
+    // Initialize map centered at (0, 0); we'll fitBounds after data loads
+    leafletMap = L.map('interactive-map', {
+        center: [20, 0],
+        zoom: 3,
+        zoomControl: true,
+        attributionControl: true,
+    });
+
+    // Dark-themed tile layer (CartoDB Dark Matter)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19,
+    }).addTo(leafletMap);
+}
+
+function plotRegionsOnMap(regions) {
+    if (!leafletMap || !regions || regions.length === 0) return;
+
+    // Clear existing markers/layers
+    mapMarkers.forEach(m => leafletMap.removeLayer(m));
+    mapMarkers = [];
+
+    const boundsGroup = L.featureGroup();
+
+    regions.forEach(r => {
+        // Skip regions without coordinates
+        if (r.lat === undefined || r.lon === undefined) return;
+
+        const isViolation = r.violation;
+        const fillColor = isViolation ? '#ef4444' : '#22c55e';
+        const borderColor = '#3b82f6';
+
+        // Draw polygon boundary if available
+        if (r.polygon && r.polygon.length > 2) {
+            const poly = L.polygon(r.polygon, {
+                color: borderColor,
+                weight: 2,
+                opacity: 0.7,
+                fillColor: fillColor,
+                fillOpacity: 0.12,
+            }).addTo(leafletMap);
+            mapMarkers.push(poly);
+            boundsGroup.addLayer(poly);
+        }
+
+        // Circle marker at centroid
+        const marker = L.circleMarker([r.lat, r.lon], {
+            radius: 8,
+            fillColor: fillColor,
+            color: '#fff',
+            weight: 1.5,
+            opacity: 1,
+            fillOpacity: 0.85,
+        }).addTo(leafletMap);
+
+        // Build popup HTML
+        const popupHtml = `
+            <div class="popup-header">Region #${r.region_id}</div>
+            <div class="popup-row">
+                <span class="popup-label">Vegetation</span>
+                <span class="popup-value">${(r.vegetation_percent * 100).toFixed(1)}%</span>
+            </div>
+            <div class="popup-row">
+                <span class="popup-label">Change Area</span>
+                <span class="popup-value">${formatArea(r.change_area_m2)}</span>
+            </div>
+            <div class="popup-row">
+                <span class="popup-label">Dimensions</span>
+                <span class="popup-value">${r.size_px ? r.size_px.join(' × ') + ' px' : '—'}</span>
+            </div>
+            <div class="popup-row">
+                <span class="popup-label">Coordinates</span>
+                <span class="popup-value">${r.lat.toFixed(4)}, ${r.lon.toFixed(4)}</span>
+            </div>
+            <div class="popup-status ${isViolation ? 'violation' : 'compliant'}">
+                ${isViolation ? 'NON-COMPLIANT' : 'COMPLIANT'}
+            </div>
+        `;
+
+        marker.bindPopup(popupHtml, { maxWidth: 280, minWidth: 220 });
+        mapMarkers.push(marker);
+        boundsGroup.addLayer(marker);
+    });
+
+    // Auto-zoom to fit all markers/polygons
+    if (boundsGroup.getLayers().length > 0) {
+        leafletMap.fitBounds(boundsGroup.getBounds().pad(0.15));
+    }
+}
+
+// ─── Static Map Gallery ─────────────────────────────────
+async function loadStaticMaps() {
     const gallery = document.getElementById('map-gallery');
     try {
         const res = await fetch(`${API}/api/maps`);
         const maps = await res.json();
 
         if (!maps.length) {
-            gallery.innerHTML = '<div class="empty-state"><div class="icon">🗺️</div><p>No maps generated yet. Run an analysis above.</p></div>';
+            gallery.innerHTML = '<div class="empty-state"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg><p>No maps generated yet. Run an analysis above.</p></div>';
             return;
         }
 
         gallery.innerHTML = maps.map(m => `
-            <div class="map-card fade-in">
+            <div class="map-card">
                 <img src="${API}/outputs/maps/${m}" alt="${m}" loading="lazy">
-                <div class="map-info">
-                    <span class="map-label">${m.replace(/_/g, ' ').replace('.png', '')}</span>
-                </div>
+                <div class="map-info">${m.replace(/_/g, ' ').replace('.png', '')}</div>
             </div>
         `).join('');
     } catch {
-        gallery.innerHTML = '<div class="empty-state"><div class="icon">⚠️</div><p>Could not load maps.</p></div>';
+        gallery.innerHTML = '<div class="empty-state"><p>Could not load map images.</p></div>';
     }
 }
 
@@ -363,7 +541,7 @@ async function loadMetrics() {
         const metrics = await res.json();
 
         if (!metrics || Object.keys(metrics).length === 0) {
-            grid.innerHTML = '<div class="empty-state"><div class="icon">📊</div><p>No training metrics found. Train models first.</p></div>';
+            grid.innerHTML = '<div class="empty-state"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg><p>No training metrics found. Train models first.</p></div>';
             return;
         }
 
@@ -375,19 +553,19 @@ async function loadMetrics() {
             if (history.loss) {
                 const card = createMetricsCard(`${capitalize(prettyName)} — Loss`);
                 grid.appendChild(card.el);
-                createChart(card.canvas, history, 'loss', 'val_loss', 'Loss', '#ff6b6b', '#ffd93d');
+                createChart(card.canvas, history, 'loss', 'val_loss', 'Loss', '#ef4444', '#f59e0b');
             }
 
             if (history.accuracy) {
                 const card = createMetricsCard(`${capitalize(prettyName)} — Accuracy`);
                 grid.appendChild(card.el);
-                createChart(card.canvas, history, 'accuracy', 'val_accuracy', 'Accuracy', '#6bcb77', '#4d96ff');
+                createChart(card.canvas, history, 'accuracy', 'val_accuracy', 'Accuracy', '#22c55e', '#3b82f6');
             }
 
             if (history.iou_metric) {
                 const card = createMetricsCard(`${capitalize(prettyName)} — IoU`);
                 grid.appendChild(card.el);
-                createChart(card.canvas, history, 'iou_metric', 'val_iou_metric', 'IoU', '#ff9a3c', '#a855f7');
+                createChart(card.canvas, history, 'iou_metric', 'val_iou_metric', 'IoU', '#8b5cf6', '#14b8a6');
             }
 
             if (history.precision_metric) {

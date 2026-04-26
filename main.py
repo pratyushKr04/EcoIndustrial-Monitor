@@ -15,8 +15,9 @@ import os
 import sys
 
 # Fix Windows console encoding — cp1252 can't print Unicode arrows/emojis
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+# line_buffering=True ensures output is flushed immediately (critical for subprocess progress)
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
 
 # Force legacy Keras 2 — Keras 3 causes SIGSEGV on some TF+GPU combos.
 os.environ["TF_USE_LEGACY_KERAS"] = "1"

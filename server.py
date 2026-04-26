@@ -30,8 +30,8 @@ import mimetypes
 from urllib.parse import urlparse, unquote
 
 # Fix Windows console encoding
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
 
 # Force legacy Keras 2
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
@@ -100,10 +100,11 @@ def run_analysis_background(city_name: str, dates: dict = None):
         current_job["progress"].append(f"Running: {' '.join(cmd)}")
 
         # Run as subprocess and capture output line-by-line
-        # Pass PYTHONIOENCODING so subprocess prints UTF-8 too
-        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+        # PYTHONUNBUFFERED + -u flag ensures every print() is immediately
+        # piped to the server (no block buffering when stdout is piped)
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
         process = subprocess.Popen(
-            cmd,
+            [sys.executable, "-u"] + cmd[1:],  # -u = unbuffered stdout
             cwd=ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

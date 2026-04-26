@@ -63,13 +63,16 @@ def align_images(img1: np.ndarray, img2: np.ndarray) -> Tuple[np.ndarray, np.nda
 
 
 def clip_image_to_polygon(image: np.ndarray, image_bounds: tuple,
-                          polygon) -> np.ndarray:
+                          polygon, padding: float = 0.05,
+                          mask_outside: bool = True) -> np.ndarray:
     """
-    Clip an image array to a polygon using coordinate-based masking.
+    Clip an image array to a polygon with tight cropping and optional masking.
 
-    This is a simplified version that uses bounding-box clipping when
-    rasterio is not available or the image is already a numpy array
-    without geotransform metadata.
+    Steps:
+      1. Convert polygon bounds to pixel coordinates
+      2. Add a small padding buffer (default 5% of polygon size)
+      3. Crop the image to the padded bounding box
+      4. Optionally mask (zero out) pixels that fall outside the polygon
 
     Parameters
     ----------
@@ -79,28 +82,101 @@ def clip_image_to_polygon(image: np.ndarray, image_bounds: tuple,
         (minx, miny, maxx, maxy) geographic bounds of the image.
     polygon : shapely.geometry.Polygon
         Polygon to clip to.
+    padding : float
+        Fractional padding around the polygon bounding box (0.05 = 5%).
+        Set to 0.0 for the tightest possible crop.
+    mask_outside : bool
+        If True, zero out pixels that fall outside the polygon boundary.
+        This ensures only the industrial zone pixels are non-zero.
 
     Returns
     -------
     np.ndarray
-        Clipped image region.
+        Clipped (and optionally masked) image region.
     """
     minx, miny, maxx, maxy = image_bounds
     h, w = image.shape[:2]
 
-    # Compute pixel coordinates for the polygon's bounding box
-    poly_bounds = polygon.bounds  # (minx, miny, maxx, maxy)
-    px_minx = int(max(0, (poly_bounds[0] - minx) / (maxx - minx) * w))
-    px_maxx = int(min(w, (poly_bounds[2] - minx) / (maxx - minx) * w))
-    px_miny = int(max(0, (1.0 - (poly_bounds[3] - miny) / (maxy - miny)) * h))
-    px_maxy = int(min(h, (1.0 - (poly_bounds[1] - miny) / (maxy - miny)) * h))
+    # Geographic extent of the full image
+    geo_w = maxx - minx
+    geo_h = maxy - miny
 
-    # Ensure valid crop region
-    if px_maxx <= px_minx or px_maxy <= px_miny:
-        print("[PREPROC] Warning: polygon does not overlap with image bounds.")
+    if geo_w <= 0 or geo_h <= 0:
         return np.zeros((1, 1, image.shape[2]), dtype=image.dtype)
 
-    clipped = image[px_miny:px_maxy, px_minx:px_maxx, :]
+    # Polygon bounding box
+    pb = polygon.bounds  # (minx, miny, maxx, maxy)
+
+    # Add padding (fraction of the polygon's own size)
+    poly_w = pb[2] - pb[0]
+    poly_h = pb[3] - pb[1]
+    pad_x = poly_w * padding
+    pad_y = poly_h * padding
+
+    # Padded polygon bounds (clamped to image bounds)
+    padded_minx = max(minx, pb[0] - pad_x)
+    padded_maxx = min(maxx, pb[2] + pad_x)
+    padded_miny = max(miny, pb[1] - pad_y)
+    padded_maxy = min(maxy, pb[3] + pad_y)
+
+    # Convert to pixel coordinates
+    px_left  = int((padded_minx - minx) / geo_w * w)
+    px_right = int((padded_maxx - minx) / geo_w * w)
+    px_top   = int((1.0 - (padded_maxy - miny) / geo_h) * h)
+    px_bot   = int((1.0 - (padded_miny - miny) / geo_h) * h)
+
+    # Clamp to image dimensions
+    px_left  = max(0, min(px_left, w - 1))
+    px_right = max(px_left + 1, min(px_right, w))
+    px_top   = max(0, min(px_top, h - 1))
+    px_bot   = max(px_top + 1, min(px_bot, h))
+
+    # Crop the image
+    clipped = image[px_top:px_bot, px_left:px_right, :].copy()
+
+    if not mask_outside:
+        return clipped
+
+    # Apply polygon mask: zero out pixels outside the actual polygon
+    clip_h, clip_w = clipped.shape[:2]
+    if clip_h == 0 or clip_w == 0:
+        return clipped
+
+    # Build a fast rasterized mask using vectorized coordinate grid
+    # Create arrays of geographic coords for every pixel center
+    xs = np.linspace(padded_minx, padded_maxx, clip_w, endpoint=False)
+    xs += (padded_maxx - padded_minx) / clip_w / 2  # Center of pixel
+    ys = np.linspace(padded_maxy, padded_miny, clip_h, endpoint=False)
+    ys -= (padded_maxy - padded_miny) / clip_h / 2  # Center of pixel
+
+    # Use matplotlib.path for fast vectorized point-in-polygon test
+    from matplotlib.path import Path
+
+    try:
+        if polygon.geom_type == 'MultiPolygon':
+            exterior_coords = list(polygon.geoms[0].exterior.coords)
+        else:
+            exterior_coords = list(polygon.exterior.coords)
+    except Exception:
+        return clipped  # Can't extract coords, skip masking
+
+    poly_path = Path(exterior_coords)
+
+    # Create meshgrid of all pixel coordinates
+    xx, yy = np.meshgrid(xs, ys)
+    points = np.column_stack((xx.ravel(), yy.ravel()))
+
+    # Vectorized point-in-polygon test (very fast)
+    mask = poly_path.contains_points(points).reshape(clip_h, clip_w)
+
+    # If the mask caught nothing (possible edge case), skip masking
+    if not mask.any():
+        return clipped
+
+    # Apply mask: zero out non-polygon pixels
+    mask_3d = np.expand_dims(mask, axis=2).astype(clipped.dtype)
+    clipped = clipped * mask_3d
+
     return clipped
 
 

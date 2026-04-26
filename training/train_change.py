@@ -75,8 +75,8 @@ def prepare_change_data(image_t1: np.ndarray,
     for idx, row in industrial_gdf.iterrows():
         poly = row.geometry
 
-        crop1 = clip_image_to_polygon(image_t1, roi_bounds, poly)
-        crop2 = clip_image_to_polygon(image_t2, roi_bounds, poly)
+        crop1 = clip_image_to_polygon(image_t1, roi_bounds, poly, mask_outside=False)
+        crop2 = clip_image_to_polygon(image_t2, roi_bounds, poly, mask_outside=False)
 
         h, w = crop1.shape[:2]
         if h * w < MIN_CLIP_PIXELS or not has_valid_content(crop1):

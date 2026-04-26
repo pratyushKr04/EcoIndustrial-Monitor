@@ -80,14 +80,20 @@ def change_mask(ndvi_t1: np.ndarray, ndvi_t2: np.ndarray,
     return (diff > threshold).astype(np.uint8)
 
 
-def compute_vegetation_percentage(veg_mask: np.ndarray) -> float:
+def compute_vegetation_percentage(veg_mask: np.ndarray,
+                                   valid_mask: np.ndarray = None) -> float:
     """
     Compute the percentage of vegetation pixels in a mask.
 
     Parameters
     ----------
     veg_mask : np.ndarray
-        Binary vegetation mask.
+        Binary vegetation mask (H, W). 1 = vegetation, 0 = non-vegetation.
+    valid_mask : np.ndarray, optional
+        Binary mask (H, W) indicating which pixels are inside the actual
+        polygon boundary. If provided, only those pixels are counted.
+        This prevents masked-out (black) regions from inflating the
+        denominator and artificially lowering the vegetation percentage.
 
     Returns
     -------
@@ -96,6 +102,15 @@ def compute_vegetation_percentage(veg_mask: np.ndarray) -> float:
     """
     if veg_mask.size == 0:
         return 0.0
+
+    if valid_mask is not None:
+        total_valid = float(valid_mask.sum())
+        if total_valid == 0:
+            return 0.0
+        # Only count vegetation pixels that are also inside the polygon
+        veg_inside = float((veg_mask * valid_mask).sum())
+        return veg_inside / total_valid
+
     return float(veg_mask.sum()) / float(veg_mask.size)
 
 
